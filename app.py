@@ -34,5 +34,30 @@ if st.button("Process and Compute"):
                 wa_df = parse_whatsapp_folder(wa_files)
             st.success(f"WhatsApp parsed: {len(wa_df)} club files.")
 
+            with st.spinner("Computing sentiment..."):
+                sent_df = compute_sentiment_per_club(survey_agg)
+            st.success("Sentiment computed.")
+
+            with st.spinner("Computing group scores and auto-grouping..."):
+                final_df, winners_df = compute_group_scores(survey_agg, wa_df, sent_df, event_agg, k_groups=4)
+                final_df.to_csv("outputs/combined_scores.csv", index=False)
+                winners_df.to_csv("outputs/group_winners.csv", index=False)
+
+            st.success("Computed final scores.")
+
+            st.subheader("Auto-grouped winners (one per group)")
+            st.dataframe(winners_df)
+
+            st.subheader("All clubs (grouped and scored)")
+            show_cols = ['club_name','group','heard_often_mean','participation_mean','sentiment_score','whatsapp_msgs','event_count','group_score','overall_score']
+            st.dataframe(final_df[show_cols])
+
+            # overall winner
+            top = final_df.sort_values('overall_score', ascending=False).iloc[0]
+            st.success(f"🏆 Overall best club: **{top['club_name']}** (overall_score: {top['overall_score']:.3f})")
+
+            st.download_button("Download final scores CSV", final_df.to_csv(index=False), "final_scores.csv", "text/csv")
+            st.download_button("Download group winners CSV", winners_df.to_csv(index=False), "group_winners.csv", "text/csv")
+
         except Exception as e:
             st.exception(e)
