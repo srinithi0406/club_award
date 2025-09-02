@@ -39,7 +39,7 @@ if st.button("Process and Compute"):
             st.success("Sentiment computed.")
 
             with st.spinner("Computing group scores and auto-grouping..."):
-                final_df, winners_df = compute_group_scores(survey_agg, wa_df, sent_df, event_agg, k_groups=4)
+                final_df, winners_df = compute_group_scores(survey_agg, wa_df, sent_df, event_agg)
                 final_df.to_csv("outputs/combined_scores.csv", index=False)
                 winners_df.to_csv("outputs/group_winners.csv", index=False)
 

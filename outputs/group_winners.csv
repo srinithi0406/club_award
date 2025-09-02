@@ -1,5 +1,5 @@
 group,club_name,group_score,overall_score
-Group_1,coding club,0.84845,0.8346549099213397
-Group_2,drama club,0.9527100000000001,1.0
-Group_3,music club,0.70621,0.6090776452676986
-Group_4,football club,0.32404,0.0029973357015985833
+entertainment,drama club,0.45271000000000006,0.24547351796491634
+literature & knowledge,quiz club,0.85402,1.0
+sports,football club,0.6240399999999999,0.5676011055333068
+tech,coding club,0.84845,0.9895275161223606

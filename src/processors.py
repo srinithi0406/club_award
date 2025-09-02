@@ -17,18 +17,21 @@ EVENT_KEYWORDS = [
     'meet','meetup','talk','webinar','presentation','contest'
 ]
 
+CATEGORY_KEYWORDS = {
+    'tech': ['coding', 'robotics', 'programming', 'hackathon', 'python', 'java', 'embedded', 'electronics'],
+    'sports': ['football', 'basketball', 'cricket', 'tennis', 'soccer', 'training', 'match', 'tournament', 'camp', 'practice', 'tryouts'],
+    'entertainment': ['music', 'dance', 'drama', 'theatre', 'acoustic', 'play', 'singing', 'performance', 'recording'],
+    'literature & knowledge': ['quiz', 'debate', 'tamil', 'lecture', 'knowledge', 'mun', 'cultural', 'seminar', 'talk']
+}
+
 def normalize_name(name: str) -> str:
     return name.strip().lower()
+
 
 
 # Survey parsing
 
 def parse_survey(file_like):
-    """
-    Read survey CSV (file-like or path). Expect a column 'club_name'.
-    Optional columns: 'heard_often' (1-5), 'participation_count', 'feedback_text'
-    Returns aggregated DataFrame per club.
-    """
     df = pd.read_csv(file_like)
     df['club_name'] = df['club_name'].apply(normalize_name)
 
@@ -66,6 +69,7 @@ def parse_survey(file_like):
     return agg
 
 
+
 # WhatsApp parsing
 
 def parse_whatsapp_text_file_bytes(content_bytes):
@@ -88,17 +92,11 @@ def parse_whatsapp_text_file_bytes(content_bytes):
     return {'total_msgs': total_msgs, 'unique_senders': len(senders), 'event_mentions': event_mentions}
 
 def parse_whatsapp_folder(uploaded_files):
-    """
-    uploaded_files: list of streamlit UploadedFile-like objects or list of file paths
-    Expects filenames like "Coding Club.txt" -> club_name inferred from filename
-    Returns DataFrame with club_name, whatsapp_msgs, whatsapp_unique_senders, whatsapp_event_mentions
-    """
     rows = []
     for f in uploaded_files:
         fname = getattr(f, "name", None) or os.path.basename(f)
         club_name = normalize_name(os.path.splitext(fname)[0])
         try:
-            # if streamlit UploadedFile, .read() gives bytes
             if hasattr(f, "read"):
                 content = f.read()
                 if isinstance(content, str):
@@ -118,13 +116,10 @@ def parse_whatsapp_folder(uploaded_files):
     return pd.DataFrame(rows)
 
 
-# Event log parsing (for auto-grouping)
+
+# Event log parsing
 
 def parse_event_log(file_like):
-    """
-    Reads an event log CSV or Excel. Expected columns: club_name, event_title, event_description, date (optional)
-    Returns DataFrame of events and an aggregated per-club DataFrame with concatenated text and event counts.
-    """
     if isinstance(file_like, str) or hasattr(file_like, "read"):
         try:
             df = pd.read_csv(file_like)
@@ -135,7 +130,6 @@ def parse_event_log(file_like):
     df.columns = [c.strip() for c in df.columns]
 
     df['club_name'] = df['club_name'].apply(normalize_name)
-    # Accept variations
     if 'club_name' not in df.columns:
         for alt in ['Club Name','club','clubname']:
             if alt in df.columns:
@@ -154,22 +148,16 @@ def parse_event_log(file_like):
 
     df['event_title'] = df.get('event_title','').fillna('')
     df['event_description'] = df.get('event_description','').fillna('')
-    
-    # aggregated per club
+
     agg = df.groupby('club_name').agg(
         event_count = ('event_title','count'),
         events_text = ('event_title', lambda s: " ".join(s.tolist())),
         descriptions_text = ('event_description', lambda s: " ".join(s.tolist()))
     ).reset_index()
 
-    # build text for auto-grouping
     agg['text_for_grouping'] = (
-        agg['events_text'].fillna('') + ' ' +
-        agg['descriptions_text'].fillna('')
+        agg['events_text'].fillna('') + ' ' + agg['descriptions_text'].fillna('')
     ).str.lower()
-
-    # fallback text if empty
-    agg['text_for_grouping'] = agg['text_for_grouping'].fillna('').astype(str)
 
     return df, agg[['club_name','event_count','text_for_grouping']]
 
@@ -190,47 +178,21 @@ def compute_sentiment_per_club(agg_survey_df):
     return pd.DataFrame(rows)
 
 
-# Auto-group via semantics + KMeans (using event text)
 
-def auto_group_clubs_by_text(club_names, texts, k=4):
-    """
-    Uses semantic embeddings for clustering instead of TF-IDF.
-    club_names: list of club names
-    texts: list of concatenated event title + description
-    k: number of clusters
-    Returns: DataFrame with columns: club_name, group
-    """
-    assert len(club_names) == len(texts)
-    docs = [f"{club_names[i]} {texts[i]}"  
-        for i in range(len(club_names))]
+# Auto-assign group using keywords
 
-    # Load pre-trained sentence transformer
-    model = SentenceTransformer('all-MiniLM-L6-v2')  # lightweight, fast, good for semantic similarity
-
-    # Generate embeddings
-    embeddings = model.encode(docs, convert_to_numpy=True)
-
-    # Determine number of clusters
-    n = len(docs)
-    k = min(k, max(1, n))
-
-    # KMeans on embeddings
-    km = KMeans(n_clusters=k, random_state=42, n_init=10)
-    labels = km.fit_predict(embeddings)
-
-    # Build DataFrame
-    rows = [{'club_name': club_names[i], 'group': f'Group_{labels[i]+1}'} for i in range(len(club_names))]
-    return pd.DataFrame(rows)
+def assign_club_to_category(club_name, text):
+    text = f"{club_name} {text}".lower()
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            return category
+    # fallback
+    return 'others'
 
 
+# Combine and scoring
 
-# Combine and scoring (auto-group from event texts)
-
-def compute_group_scores(survey_agg_df, whatsapp_df, sentiment_df, event_agg_df, k_groups=4, default_weights=None):
-    """
-    Merge survey, whatsapp, sentiment, event_agg_df and auto-group clubs based on event_agg_df['text_for_grouping'].
-    Returns final_df (per club) and winners_df (per group).
-    """
+def compute_group_scores(survey_agg_df, whatsapp_df, sentiment_df, event_agg_df, default_weights=None):
     df = pd.merge(survey_agg_df, sentiment_df, on='club_name', how='outer')
     df = pd.merge(df, whatsapp_df, on='club_name', how='outer')
     df = pd.merge(df, event_agg_df, on='club_name', how='outer')
@@ -245,22 +207,16 @@ def compute_group_scores(survey_agg_df, whatsapp_df, sentiment_df, event_agg_df,
     df['event_count'] = df['event_count'].fillna(0)
     df['text_for_grouping'] = df['text_for_grouping'].fillna('')
 
-    # auto-group using event text
-    club_names = df['club_name'].tolist()
-    texts = df['text_for_grouping'].tolist()
-    group_df = auto_group_clubs_by_text(club_names, texts, k=k_groups)
-    df = df.merge(group_df, on='club_name', how='left')
+    # Assign named groups
+    df['group'] = df.apply(lambda r: assign_club_to_category(r['club_name'], r['text_for_grouping']), axis=1)
 
-    # default weights
     if default_weights is None:
         default_weights = {'heard':0.30,'participation':0.30,'sentiment':0.20,'whatsapp_msgs':0.10,'event_count':0.10}
 
     final_rows = []
     for group, gdf in df.groupby('group'):
         g = gdf.copy()
-        # normalizations
         g['heard_norm'] = g['heard_often_mean'] / 5.0
-        # participation normalize
         if g['participation_mean'].max() - g['participation_mean'].min() > 0:
             g['participation_norm'] = (g['participation_mean'] - g['participation_mean'].min()) / (g['participation_mean'].max() - g['participation_mean'].min())
         else:
@@ -276,7 +232,6 @@ def compute_group_scores(survey_agg_df, whatsapp_df, sentiment_df, event_agg_df,
             g['event_count_n'] = 0.0
 
         w = default_weights
-
         g['group_score'] = (
             w['heard'] * g['heard_norm'] +
             w['participation'] * g['participation_norm'] +
@@ -287,7 +242,6 @@ def compute_group_scores(survey_agg_df, whatsapp_df, sentiment_df, event_agg_df,
         final_rows.append(g)
 
     final = pd.concat(final_rows, ignore_index=True)
-    # overall normalization
     if final['group_score'].max() - final['group_score'].min() > 0:
         final['overall_score'] = (final['group_score'] - final['group_score'].min()) / (final['group_score'].max() - final['group_score'].min())
     else:
